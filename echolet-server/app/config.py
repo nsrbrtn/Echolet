@@ -7,10 +7,15 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_STORAGE_DIR = BASE_DIR / "storage"
 DEFAULT_WHISPER_MODEL = "medium"
+DEFAULT_WHISPER_DEVICE = "cpu"
+DEFAULT_WHISPER_COMPUTE_TYPE = "int8"
+DEFAULT_OBSIDIAN_VAULT_PATH = Path("./dev_obsidian_vault")
+DEFAULT_ECHOLET_INBOX_DIR = Path("80-89 AI") / "85 Echolet"
+DEFAULT_ECHOLET_ATTACHMENTS_DIR = DEFAULT_ECHOLET_INBOX_DIR / "_attachments"
 
 
 def get_api_token() -> str:
-    return os.getenv("ECHOLET_API_TOKEN", "dev-token-change-me")
+    return os.getenv("ECHOLET_TOKEN") or os.getenv("ECHOLET_API_TOKEN", "dev-token-change-me")
 
 
 def get_storage_root() -> Path:
@@ -21,20 +26,24 @@ def get_audio_root() -> Path:
     return get_storage_root() / "audio"
 
 
-def get_events_root() -> Path:
-    return get_storage_root() / "events"
+def get_obsidian_vault_root() -> Path:
+    return Path(os.getenv("OBSIDIAN_VAULT_PATH", str(DEFAULT_OBSIDIAN_VAULT_PATH)))
 
 
-def get_whisper_command() -> str:
-    configured = os.getenv("WHISPER_COMMAND")
-    if configured:
-        return configured
+def get_echolet_inbox_dir() -> Path:
+    return Path(os.getenv("ECHOLET_INBOX_DIR", str(DEFAULT_ECHOLET_INBOX_DIR)))
 
-    venv_whisper = BASE_DIR / ".venv" / "bin" / "whisper"
-    if venv_whisper.exists():
-        return str(venv_whisper)
 
-    return "whisper"
+def get_echolet_attachments_dir() -> Path:
+    return Path(os.getenv("ECHOLET_ATTACHMENTS_DIR", str(DEFAULT_ECHOLET_ATTACHMENTS_DIR)))
+
+
+def get_echolet_inbox_root() -> Path:
+    return get_obsidian_vault_root() / get_echolet_inbox_dir()
+
+
+def get_echolet_attachments_root() -> Path:
+    return get_obsidian_vault_root() / get_echolet_attachments_dir()
 
 
 def get_whisper_model() -> str:
@@ -45,6 +54,15 @@ def get_whisper_language() -> str:
     return os.getenv("WHISPER_LANGUAGE", "ru")
 
 
+def get_whisper_device() -> str:
+    return os.getenv("WHISPER_DEVICE", DEFAULT_WHISPER_DEVICE)
+
+
+def get_whisper_compute_type() -> str:
+    return os.getenv("WHISPER_COMPUTE_TYPE", DEFAULT_WHISPER_COMPUTE_TYPE)
+
+
 def ensure_storage_dirs() -> None:
     get_audio_root().mkdir(parents=True, exist_ok=True)
-    get_events_root().mkdir(parents=True, exist_ok=True)
+    get_echolet_inbox_root().mkdir(parents=True, exist_ok=True)
+    get_echolet_attachments_root().mkdir(parents=True, exist_ok=True)

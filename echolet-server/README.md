@@ -1,19 +1,36 @@
 # echolet-server
 
-Минимальный локальный FastAPI-сервер для приёма аудиофайлов от будущего устройства `echolet`.
+Локальный FastAPI-сервер для `echolet`, который принимает аудио, делает транскрипцию через `faster-whisper` и складывает входящие материалы в Obsidian vault. Умные решения дальше принимает уже OpenClaw.
 
-## Что делает сервер
+## Новая архитектура
 
-- принимает `multipart/form-data` на `POST /api/v1/upload-audio`
-- проверяет `Authorization: Bearer <TOKEN>`
-- сохраняет аудиофайл в `storage/audio/YYYY/MM/`
-- создаёт event JSON в `storage/events/`
-- сразу отвечает на upload и запускает локальный Whisper CLI в фоне
-- дописывает транскрипт, тип команды и статус транскрибации в event JSON
-- пишет в event JSON, какой моделью Whisper получен результат
-- если Whisper падает, файл и event всё равно сохраняются
+```text
+ESP32-S3 Sense
+  ->
+FastAPI server
+  ->
+faster-whisper transcription
+  ->
+Obsidian vault / 80-89 AI/85 Echolet
+  ->
+OpenClaw
+  ->
+финальные заметки / задачи / напоминания
+```
 
-## Структура
+Смысл простой:
+
+- сервер принимает WAV и проверяет Bearer token
+- сервер сохраняет исходное аудио во временное storage
+- сервер запускает `faster-whisper`
+- сервер создаёт один markdown-файл входящей записи в `80-89 AI/85 Echolet`
+- сервер копирует исходное аудио в `80-89 AI/85 Echolet/_attachments/YYYY/MM/`
+- сервер не создаёт финальные заметки в других папках
+- сервер не создаёт задачи
+- сервер не отправляет Telegram
+- сервер не решает, что делать с записью, кроме необязательного hint в frontmatter
+
+## Структура проекта
 
 ```text
 echolet-server/
@@ -22,21 +39,24 @@ echolet-server/
     config.py
     auth.py
     storage.py
-    events.py
     transcription.py
+    inbox.py
     command_detection.py
+    events.py
   storage/
     audio/
-    events/
   tools/
     fake_device_upload.py
   tests/
     test_upload.py
+    test_command_detection.py
   requirements.txt
   README.md
 ```
 
-## Установка
+`events.py` можно держать как legacy-модуль, но основной формат теперь markdown во vault. JSON inbox дальше не развиваем без отдельной команды.
+
+## Настройка
 
 ```bash
 cd echolet-server
@@ -44,125 +64,142 @@ python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+Пример `.env`:
+
+```dotenv
+ECHOLET_TOKEN=test-token
+OBSIDIAN_VAULT_PATH=/absolute/path/to/obsidian/vault
+ECHOLET_INBOX_DIR=80-89 AI/85 Echolet
+ECHOLET_ATTACHMENTS_DIR=80-89 AI/85 Echolet/_attachments
+WHISPER_MODEL=small
+WHISPER_LANGUAGE=ru
+WHISPER_DEVICE=cpu
+WHISPER_COMPUTE_TYPE=int8
+```
+
+Поддерживается и старый `ECHOLET_API_TOKEN`, но нормальное имя теперь `ECHOLET_TOKEN`.
+
+Значения по умолчанию:
+
+```dotenv
+OBSIDIAN_VAULT_PATH=./dev_obsidian_vault
+ECHOLET_INBOX_DIR=80-89 AI/85 Echolet
+ECHOLET_ATTACHMENTS_DIR=80-89 AI/85 Echolet/_attachments
+WHISPER_MODEL=medium
+WHISPER_LANGUAGE=ru
+WHISPER_DEVICE=cpu
+WHISPER_COMPUTE_TYPE=int8
+```
+
+Если нужных папок нет, сервер создаёт их сам. Пути задаются через `pathlib`, так что пробелы в названиях директорий работают нормально.
 
 ## Запуск
 
 ```bash
 cd echolet-server
-export ECHOLET_API_TOKEN="change-me"
+export ECHOLET_TOKEN="change-me"
+export OBSIDIAN_VAULT_PATH="/absolute/path/to/obsidian/vault"
+export ECHOLET_INBOX_DIR="80-89 AI/85 Echolet"
+export ECHOLET_ATTACHMENTS_DIR="80-89 AI/85 Echolet/_attachments"
 export WHISPER_MODEL="medium"
 export WHISPER_LANGUAGE="ru"
+export WHISPER_DEVICE="cpu"
+export WHISPER_COMPUTE_TYPE="int8"
 uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
 ```
 
-По умолчанию данные пишутся в `echolet-server/storage/`.
+По умолчанию временное серверное аудио хранится в `echolet-server/storage/audio/`.
 
-Если `openai-whisper` установлен в проектную `.venv`, сервер сам найдёт `.venv/bin/whisper`. Явно задавать `WHISPER_COMMAND` нужно только если у тебя другой путь к CLI.
+По умолчанию сервер гоняет распознавание через `faster-whisper` на `cpu` с `compute_type=int8`, чтобы не превращать Lenovo в тостер. При желании это можно переопределить переменными `WHISPER_DEVICE` и `WHISPER_COMPUTE_TYPE`.
 
-Если нужен другой каталог:
+## Что создаёт сервер
 
-```bash
-export ECHOLET_STORAGE_DIR="/absolute/path/to/storage"
-```
-
-## Настройка Whisper
-
-Сервер вызывает локальный Whisper CLI. Нормальный базовый вариант для этого проекта:
-
-```bash
-cd echolet-server
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-```
-
-`requirements.txt` включает `imageio-ffmpeg`, поэтому проектная `.venv` даёт Whisper рабочий `ffmpeg` без отдельной системной установки.
-
-По умолчанию сервер использует модель `medium`. Это теперь дефолт проекта, так что `WHISPER_MODEL` нужен только если хочешь сознательно переопределить модель.
-
-Минимальная конфигурация окружения:
-
-```bash
-export WHISPER_MODEL="medium"
-export WHISPER_LANGUAGE="ru"
-```
-
-Если хочется быстрее, но хуже по качеству, можно вручную откатиться на `small`:
-
-```bash
-export WHISPER_MODEL="small"
-```
-
-Если `whisper` лежит не в проектной `.venv`, можно указать путь явно:
-
-```bash
-export WHISPER_COMMAND="/absolute/path/to/whisper"
-```
-
-Если хочешь использовать системный `ffmpeg` вместо bundled-варианта, это тоже нормально:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y ffmpeg
-```
-
-При загрузке сервер:
-
-1. сохраняет WAV
-2. сразу создаёт event JSON со статусом `pending`
-3. возвращает `200 OK` без ожидания Whisper
-4. в фоне запускает локальный Whisper CLI
-5. после транскрибации определяет тип команды по префиксу
-6. обновляет event JSON до `completed` или `failed`
-
-Если Whisper не отработал, upload всё равно считается принятым: `ok=true`, файл остаётся на диске, а event JSON обновляется с `transcription_status: "failed"`, `transcript: null` и `transcription_error`.
-
-## MVP command detection
-
-После получения `transcript` сервер делает простую классификацию по началу текста.
-
-Поддерживаемые голосовые префиксы:
-
-- `заметка:` -> `note`
-- `запись:` -> `note`
-- `мысль:` -> `note`
-- `идея:` -> `idea`
-- `задача:` -> `task`
-- `напоминание:` -> `reminder`
-- `напомни:` -> `reminder`
-
-Регистр не важен.
-
-Если префикс найден явно, в event JSON пишется:
-
-- `detected_command: "note" | "idea" | "task" | "reminder"`
-- `command_confidence: "explicit"`
-- `clean_text`: текст без префикса
-
-Если префикс не найден, используется fallback:
-
-- `detected_command: "note"`
-- `command_confidence: "fallback"`
-- `clean_text`: исходный transcript
-
-Примеры:
+Структура во vault:
 
 ```text
-"Заметка: надо проверить страницу дизайн-поддержки"
--> detected_command: "note"
--> clean_text: "надо проверить страницу дизайн-поддержки"
-
-"Напоминание: завтра оплатить интернет"
--> detected_command: "reminder"
--> clean_text: "завтра оплатить интернет"
-
-"Надо подумать над корпусом устройства"
--> detected_command: "note"
--> command_confidence: "fallback"
--> clean_text: "Надо подумать над корпусом устройства"
+80-89 AI/
+  85 Echolet/
+    2026-05-29 18-30-00 echolet.md
+    _attachments/
+      2026/
+        05/
+          audio-2026-05-29-18-30-00.wav
 ```
 
-Это специально тупая MVP-логика. Более умная классификация появится позже, когда сюда подключится OpenClaw.
+Имена файлов:
+
+- markdown: `YYYY-MM-DD HH-MM-SS echolet.md`
+- audio: `audio-YYYY-MM-DD-HH-MM-SS.wav`
+
+Если имя уже занято:
+
+- `2026-05-29 18-30-00 echolet 2.md`
+- `audio-2026-05-29-18-30-00-2.wav`
+
+## Формат markdown-файла
+
+Пример:
+
+```md
+---
+source: echolet
+schema_version: "1.0"
+event_type: voice_capture
+status: new
+created_at: "2026-05-29T18:30:00"
+received_at: "2026-05-29T18:30:05"
+device_id: "echolet-001"
+language: "ru"
+audio: "_attachments/2026/05/audio-2026-05-29-18-30-00.wav"
+battery: "83"
+firmware_version: "0.1.0"
+detected_command_hint: "note"
+command_confidence: "explicit"
+---
+
+# Echolet capture 2026-05-29 18:30
+
+## Transcript
+
+Заметка: надо подумать над корпусом устройства.
+
+## Original audio
+
+[[audio-2026-05-29-18-30-00.wav]]
+
+## Instructions for OpenClaw
+
+OpenClaw should process this capture and decide what to do with it.
+
+Rules:
+
+- If the transcript starts with `заметка`, create a regular Obsidian note.
+- If the transcript starts with `идея`, create an idea note.
+- If the transcript starts with `задача`, create a task in Obsidian.
+- If the transcript starts with `напоминание` or `напомни`, create or schedule a Telegram reminder.
+- If unsure, save as a regular note.
+- Reference or attach the original audio file when useful.
+- After successful processing, OpenClaw may update `status` from `new` to `processed`.
+```
+
+`detected_command_hint` и `command_confidence` добавляются только как hint. Сервер не исполняет действие по ним.
+
+## Если faster-whisper не сработал
+
+Сервер всё равно:
+
+- сохраняет исходное аудио
+- копирует его в Obsidian attachments
+- создаёт markdown-файл
+
+В таком markdown будет:
+
+- `status: transcription_failed`
+- блок `## Transcription error`
+- текст ошибки
+
+Это нужно, чтобы OpenClaw всё равно увидел входящий материал и сам решил, что с ним делать.
 
 ## Пример запроса
 
@@ -170,7 +207,7 @@ sudo apt-get install -y ffmpeg
 curl -X POST "http://127.0.0.1:8765/api/v1/upload-audio" \
   -H "Authorization: Bearer change-me" \
   -F "file=@sample.wav" \
-  -F "device_id=echolet-dev-1" \
+  -F "device_id=echolet-001" \
   -F "created_at=2026-05-29T10:30:45Z" \
   -F "battery=87" \
   -F "firmware_version=0.1.0"
@@ -182,16 +219,14 @@ curl -X POST "http://127.0.0.1:8765/api/v1/upload-audio" \
 {
   "ok": true,
   "status": "received",
-  "event_id": "...",
-  "transcription_status": "pending"
+  "event_id": "echolet-20260529133045",
+  "transcription_status": "pending",
+  "whisper_model": "medium",
+  "inbox_dir": "80-89 AI/85 Echolet"
 }
 ```
 
-## Тестовый клиент
-
-Скрипт `tools/fake_device_upload.py` имитирует устройство и отправляет WAV-файл на локальный сервер.
-
-Пример запуска:
+## Проверка через fake_device_upload.py
 
 ```bash
 cd echolet-server
@@ -204,34 +239,10 @@ python3 tools/fake_device_upload.py ./sample.wav \
   --firmware-version 0.1.0
 ```
 
-После отправки проверь event JSON в `storage/events/` или в каталоге из `ECHOLET_STORAGE_DIR`.
+После отправки проверь:
 
-Пример ожидаемого event JSON:
-
-```json
-{
-  "event_id": "8674fa22b23c4dfca17315bfa98f7e7c",
-  "kind": "audio_uploaded",
-  "received_at": "2026-05-29T13:51:42.727853+00:00",
-  "source": "echolet",
-  "device_id": "echolet-dev-1",
-  "type": "voice",
-  "created": "2026-05-29T10:30:45Z",
-  "battery": "87",
-  "firmware_version": "0.1.0",
-  "original_filename": "sample.wav",
-  "audio_path": "/absolute/path/to/storage/audio/2026/05/20260529T103045_deadbeef.wav",
-  "whisper_model": "medium",
-  "transcription_status": "completed",
-  "transcript": "Напоминание: завтра оплатить интернет",
-  "detected_command": "reminder",
-  "command_confidence": "explicit",
-  "clean_text": "завтра оплатить интернет",
-  "status": "new",
-  "transcription_error": null,
-  "transcription_finished_at": "2026-05-29T13:52:10.123456+00:00"
-}
-```
+- markdown в `80-89 AI/85 Echolet`
+- audio в `80-89 AI/85 Echolet/_attachments/YYYY/MM/`
 
 ## Тесты
 
@@ -239,3 +250,27 @@ python3 tools/fake_device_upload.py ./sample.wav \
 cd echolet-server
 pytest
 ```
+
+Тесты проверяют:
+
+- upload создаёт markdown в `80-89 AI/85 Echolet`
+- markdown содержит YAML frontmatter
+- markdown содержит transcript
+- audio копируется в `_attachments/YYYY/MM/`
+- markdown содержит ссылку на audio
+- при ошибке Whisper markdown всё равно создаётся
+- при ошибке Whisper ставится `status: transcription_failed`
+- сервер не создаёт финальные markdown вне inbox-папки
+
+## Что теперь делает OpenClaw
+
+OpenClaw должен:
+
+- читать входящие markdown-файлы из `80-89 AI/85 Echolet`
+- сортировать записи
+- создавать финальные заметки
+- создавать задачи
+- создавать или планировать напоминания
+- при необходимости обновлять `status` у входящего файла
+
+То есть сервер теперь готовит сырьё, а OpenClaw делает умную работу. Так и чище, и меньше дублирования логики.

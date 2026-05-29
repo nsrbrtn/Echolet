@@ -11,13 +11,13 @@ HTTP upload over Wi-Fi
   ->
 FastAPI server on laptop
   ->
-local Whisper
+faster-whisper
   ->
-event file for OpenClaw
+Obsidian inbox markdown + audio attachment
   ->
 OpenClaw
   ->
-Obsidian / Telegram
+Obsidian notes / tasks / Telegram reminders
 ```
 
 ## ESP32 Role
@@ -39,21 +39,27 @@ The laptop-side FastAPI server is responsible for:
 - accepting WAV uploads
 - verifying the bearer token
 - saving the uploaded file
-- launching Whisper
-- creating an event for OpenClaw
+- running `faster-whisper` transcription by default
+- copying audio into the Obsidian vault
+- creating an inbox markdown file for OpenClaw in `80-89 AI/85 Echolet`
+
+The server does not create final notes, tasks, or Telegram reminders.
 
 ## Whisper Role
 
-Whisper runs locally on the laptop and converts audio into text.
+`faster-whisper` runs locally on the laptop and converts audio into text.
+This step can be disabled with `SERVER_TRANSCRIBE=false`, but the default is enabled.
 
 ## OpenClaw Role
 
 OpenClaw is responsible for:
 
-- classifying the command or intent
-- creating a note
+- reading inbox markdown files from `80-89 AI/85 Echolet`
+- deciding what the capture means
+- creating a final note
 - creating a task
 - creating a reminder via Telegram
+- updating inbox item status when processing is complete
 
 ## Obsidian Role
 
@@ -66,6 +72,7 @@ Telegram is the delivery channel for reminders and possible future confirmations
 ## Boundary Rules
 
 - Device-side logic stays simple.
-- Server-side logic handles interpretation.
+- Server-side logic handles ingest and default transcription.
+- OpenClaw handles interpretation and downstream actions.
 - Audio must survive network failures.
 - MVP stays local-first and home-network-first.

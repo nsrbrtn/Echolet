@@ -23,7 +23,7 @@ def _configure_env(tmp_path, monkeypatch) -> Path:
     return vault_path
 
 
-def _upload_sample_audio() -> dict:
+def _upload_sample_audio(expected_transcription_status: str = "pending") -> dict:
     response = client.post(
         "/api/v1/upload-audio",
         headers={"Authorization": "Bearer test-token"},
@@ -41,22 +41,25 @@ def _upload_sample_audio() -> dict:
     assert payload["ok"] is True
     assert payload["status"] == "received"
     assert payload["event_id"]
-    assert payload["transcription_status"] == "pending"
+    assert payload["transcription_status"] == expected_transcription_status
     assert payload["inbox_dir"] == "80-89 AI/85 Echolet"
     return payload
 
 
-def test_upload_audio_creates_markdown_and_attachment_in_obsidian_inbox(tmp_path, monkeypatch) -> None:
+def test_upload_audio_creates_markdown_and_attachment_in_obsidian_inbox_with_transcription_by_default(
+    tmp_path, monkeypatch
+) -> None:
     vault_path = _configure_env(tmp_path, monkeypatch)
     transcription_mock = Mock(return_value="Заметка: привет мир")
     monkeypatch.setattr("app.main.transcribe_audio_file", transcription_mock)
 
-    _upload_sample_audio()
+    payload = _upload_sample_audio(expected_transcription_status="pending")
 
     temp_audio_dir = tmp_path / "storage" / "audio" / "2026" / "05"
     temp_audio_files = list(temp_audio_dir.glob("*.wav"))
     assert len(temp_audio_files) == 1
     transcription_mock.assert_called_once_with(temp_audio_files[0])
+    assert payload["transcription_status"] == "pending"
 
     inbox_dir = vault_path / "80-89 AI" / "85 Echolet"
     markdown_files = list(inbox_dir.glob("*.md"))
@@ -73,8 +76,6 @@ def test_upload_audio_creates_markdown_and_attachment_in_obsidian_inbox(tmp_path
     assert 'battery: "87"' in markdown_text
     assert 'firmware_version: "0.1.0"' in markdown_text
     assert 'audio: "_attachments/2026/05/audio-2026-05-29-10-30-45.wav"' in markdown_text
-    assert 'detected_command_hint: "note"' in markdown_text
-    assert 'command_confidence: "explicit"' in markdown_text
     assert "# Echolet capture 2026-05-29 10:30" in markdown_text
     assert "## Transcript" in markdown_text
     assert "Заметка: привет мир" in markdown_text
@@ -82,6 +83,8 @@ def test_upload_audio_creates_markdown_and_attachment_in_obsidian_inbox(tmp_path
     assert "[[audio-2026-05-29-10-30-45.wav]]" in markdown_text
     assert "## Instructions for OpenClaw" in markdown_text
     assert "create or schedule a Telegram reminder" in markdown_text
+    assert 'detected_command_hint: "note"' in markdown_text
+    assert 'command_confidence: "explicit"' in markdown_text
 
     attachment_dir = inbox_dir / "_attachments" / "2026" / "05"
     attachment_files = list(attachment_dir.glob("*.wav"))
@@ -93,22 +96,65 @@ def test_upload_audio_creates_markdown_and_attachment_in_obsidian_inbox(tmp_path
     assert all_markdown == markdown_files
 
 
-def test_upload_audio_creates_failed_markdown_when_whisper_fails(tmp_path, monkeypatch) -> None:
+def test_upload_audio_creates_markdown_with_transcript_when_server_transcribe_enabled(tmp_path, monkeypatch) -> None:
     vault_path = _configure_env(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        "app.main.transcribe_audio_file",
-        Mock(side_effect=TranscriptionError("mock whisper failure")),
-    )
+    monkeypatch.setenv("SERVER_TRANSCRIBE", "true")
+    transcription_mock = Mock(return_value="Заметка: привет мир")
+    monkeypatch.setattr("app.main.transcribe_audio_file", transcription_mock)
 
-    _upload_sample_audio()
+    payload = _upload_sample_audio(expected_transcription_status="pending")
+
+    temp_audio_dir = tmp_path / "storage" / "audio" / "2026" / "05"
+    temp_audio_files = list(temp_audio_dir.glob("*.wav"))
+    assert len(temp_audio_files) == 1
+    transcription_mock.assert_called_once_with(temp_audio_files[0])
+    assert payload["transcription_status"] == "pending"
 
     inbox_dir = vault_path / "80-89 AI" / "85 Echolet"
     markdown_files = list(inbox_dir.glob("*.md"))
     assert len(markdown_files) == 1
 
     markdown_text = markdown_files[0].read_text(encoding="utf-8")
+    assert 'detected_command_hint: "note"' in markdown_text
+    assert 'command_confidence: "explicit"' in markdown_text
+    assert "Заметка: привет мир" in markdown_text
+
+
+def test_upload_audio_skips_transcription_when_server_transcribe_disabled(tmp_path, monkeypatch) -> None:
+    vault_path = _configure_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("SERVER_TRANSCRIBE", "false")
+    transcription_mock = Mock(return_value="Заметка: привет мир")
+    monkeypatch.setattr("app.main.transcribe_audio_file", transcription_mock)
+
+    payload = _upload_sample_audio(expected_transcription_status="skipped")
+
+    transcription_mock.assert_not_called()
+    assert payload["transcription_status"] == "skipped"
+
+    inbox_dir = vault_path / "80-89 AI" / "85 Echolet"
+    markdown_files = list(inbox_dir.glob("*.md"))
+    assert len(markdown_files) == 1
+
+    markdown_text = markdown_files[0].read_text(encoding="utf-8")
+    assert "Transcript was not generated by the server." in markdown_text
+    assert 'detected_command_hint: "note"' not in markdown_text
+
+
+def test_upload_audio_creates_failed_markdown_when_whisper_fails(tmp_path, monkeypatch) -> None:
+    vault_path = _configure_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("SERVER_TRANSCRIBE", "true")
+    monkeypatch.setattr("app.main.transcribe_audio_file", Mock(side_effect=TranscriptionError("mock whisper failure")))
+
+    payload = _upload_sample_audio(expected_transcription_status="pending")
+
+    assert payload["transcription_status"] == "pending"
+    inbox_dir = vault_path / "80-89 AI" / "85 Echolet"
+    markdown_files = list(inbox_dir.glob("*.md"))
+    assert len(markdown_files) == 1
+
+    markdown_text = markdown_files[0].read_text(encoding="utf-8")
     assert "status: transcription_failed" in markdown_text
-    assert "Transcript unavailable." in markdown_text
+    assert "Transcript unavailable because server-side transcription failed." in markdown_text
     assert "## Transcription error" in markdown_text
     assert "mock whisper failure" in markdown_text
 
@@ -120,7 +166,6 @@ def test_upload_audio_creates_failed_markdown_when_whisper_fails(tmp_path, monke
 
 def test_upload_audio_uses_unique_names_when_note_and_audio_already_exist(tmp_path, monkeypatch) -> None:
     vault_path = _configure_env(tmp_path, monkeypatch)
-    monkeypatch.setattr("app.main.transcribe_audio_file", Mock(return_value="Идея: новый корпус"))
 
     inbox_dir = vault_path / "80-89 AI" / "85 Echolet"
     attachment_dir = inbox_dir / "_attachments" / "2026" / "05"
@@ -133,7 +178,6 @@ def test_upload_audio_uses_unique_names_when_note_and_audio_already_exist(tmp_pa
 
     new_markdown = inbox_dir / "2026-05-29 10-30-45 echolet 2.md"
     assert new_markdown.exists()
-    assert 'detected_command_hint: "idea"' in new_markdown.read_text(encoding="utf-8")
 
     new_audio = attachment_dir / "audio-2026-05-29-10-30-45-2.wav"
     assert new_audio.exists()

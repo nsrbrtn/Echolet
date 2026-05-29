@@ -46,10 +46,16 @@ If microSD usage exceeds 80%, old files from `sent` are removed.
 
 Goal:
 
-FastAPI receives the file, launches Whisper, and creates an event for OpenClaw.
+FastAPI receives the file, verifies auth, runs `faster-whisper`, stores audio in the vault, and creates an inbox markdown file for OpenClaw.
 
 ## Stage 9 — Obsidian Note
 
 Goal:
 
-After a voice recording is processed, a Markdown note appears in Obsidian.
+After a voice recording is uploaded, an inbox Markdown file with audio attachment appears in Obsidian.
+
+## Stage 10 — OpenClaw Processing
+
+Goal:
+
+OpenClaw reads inbox items, creates final notes/tasks/reminders, and marks processed captures.

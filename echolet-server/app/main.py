@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 
 from app.auth import verify_bearer_token
-from app.config import get_echolet_inbox_dir, get_whisper_model
+from app.config import get_echolet_inbox_dir, get_server_transcribe, get_whisper_model
 from app.inbox import create_obsidian_capture
 from app.storage import save_audio_file
 from app.transcription import TranscriptionError, transcribe_audio_file
@@ -16,6 +16,7 @@ from app.transcription import TranscriptionError, transcribe_audio_file
 app = FastAPI(title="echolet-server")
 logger = logging.getLogger(__name__)
 TRANSCRIPTION_PENDING = "pending"
+TRANSCRIPTION_SKIPPED = "skipped"
 
 
 def parse_created_at(value: str) -> datetime:
@@ -98,22 +99,37 @@ async def upload_audio(
     logger.info("Saved audio upload to %s", stored_path)
 
     capture_id = f"echolet-{received_at.strftime('%Y%m%d%H%M%S')}"
-    background_tasks.add_task(
-        process_transcription,
-        stored_path,
-        file.filename,
-        created_at_dt,
-        received_at,
-        device_id,
-        battery,
-        firmware_version,
-    )
+    if get_server_transcribe():
+        background_tasks.add_task(
+            process_transcription,
+            stored_path,
+            file.filename,
+            created_at_dt,
+            received_at,
+            device_id,
+            battery,
+            firmware_version,
+        )
+        transcription_status = TRANSCRIPTION_PENDING
+    else:
+        create_obsidian_capture(
+            stored_path=stored_path,
+            original_filename=file.filename,
+            created_at=created_at_dt,
+            received_at=received_at,
+            device_id=device_id,
+            battery=battery,
+            firmware_version=firmware_version,
+            transcript=None,
+            transcription_error=None,
+        )
+        transcription_status = TRANSCRIPTION_SKIPPED
 
     return {
         "ok": True,
         "status": "received",
         "event_id": capture_id,
-        "transcription_status": TRANSCRIPTION_PENDING,
+        "transcription_status": transcription_status,
         "whisper_model": get_whisper_model(),
         "inbox_dir": get_echolet_inbox_dir().as_posix(),
     }

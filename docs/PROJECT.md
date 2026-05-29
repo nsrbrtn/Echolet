@@ -36,14 +36,15 @@ MVP 0.1 is intentionally narrow:
 - save WAV to microSD
 - upload over home Wi-Fi
 - receive audio on a laptop via FastAPI
-- transcribe locally with Whisper
-- pass the event to OpenClaw
-- create notes, tasks, or reminders from the transcription
+- transcribe locally with `faster-whisper`
+- create an inbox markdown item plus attached audio in Obsidian
+- let OpenClaw turn the capture into notes, tasks, or reminders
 
 ## v0.2
 
 Possible additions for v0.2:
 
+- stronger OpenClaw automation for inbox processing
 - photo capture
 - attaching photos to notes
 - Telegram confirmations for tasks and reminders

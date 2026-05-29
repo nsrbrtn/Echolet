@@ -1,6 +1,6 @@
 # echolet-server
 
-Локальный FastAPI-сервер для `echolet`, который принимает аудио, делает транскрипцию через `faster-whisper` и складывает входящие материалы в Obsidian vault. Умные решения дальше принимает уже OpenClaw.
+Локальный FastAPI-сервер для `echolet`, который принимает аудио, транскрибирует его через `faster-whisper`, складывает материалы в Obsidian vault и создаёт входящий markdown-файл для OpenClaw.
 
 ## Новая архитектура
 
@@ -22,7 +22,7 @@ OpenClaw
 
 - сервер принимает WAV и проверяет Bearer token
 - сервер сохраняет исходное аудио во временное storage
-- сервер запускает `faster-whisper`
+- сервер по умолчанию транскрибирует аудио через `faster-whisper`
 - сервер создаёт один markdown-файл входящей записи в `80-89 AI/85 Echolet`
 - сервер копирует исходное аудио в `80-89 AI/85 Echolet/_attachments/YYYY/MM/`
 - сервер не создаёт финальные заметки в других папках
@@ -72,6 +72,7 @@ ECHOLET_TOKEN=test-token
 OBSIDIAN_VAULT_PATH=/absolute/path/to/obsidian/vault
 ECHOLET_INBOX_DIR=80-89 AI/85 Echolet
 ECHOLET_ATTACHMENTS_DIR=80-89 AI/85 Echolet/_attachments
+SERVER_TRANSCRIBE=true
 WHISPER_MODEL=small
 WHISPER_LANGUAGE=ru
 WHISPER_DEVICE=cpu
@@ -86,6 +87,7 @@ WHISPER_COMPUTE_TYPE=int8
 OBSIDIAN_VAULT_PATH=./dev_obsidian_vault
 ECHOLET_INBOX_DIR=80-89 AI/85 Echolet
 ECHOLET_ATTACHMENTS_DIR=80-89 AI/85 Echolet/_attachments
+SERVER_TRANSCRIBE=true
 WHISPER_MODEL=medium
 WHISPER_LANGUAGE=ru
 WHISPER_DEVICE=cpu
@@ -102,6 +104,7 @@ export ECHOLET_TOKEN="change-me"
 export OBSIDIAN_VAULT_PATH="/absolute/path/to/obsidian/vault"
 export ECHOLET_INBOX_DIR="80-89 AI/85 Echolet"
 export ECHOLET_ATTACHMENTS_DIR="80-89 AI/85 Echolet/_attachments"
+export SERVER_TRANSCRIBE="true"
 export WHISPER_MODEL="medium"
 export WHISPER_LANGUAGE="ru"
 export WHISPER_DEVICE="cpu"
@@ -111,7 +114,15 @@ uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
 
 По умолчанию временное серверное аудио хранится в `echolet-server/storage/audio/`.
 
-По умолчанию сервер гоняет распознавание через `faster-whisper` на `cpu` с `compute_type=int8`, чтобы не превращать Lenovo в тостер. При желании это можно переопределить переменными `WHISPER_DEVICE` и `WHISPER_COMPUTE_TYPE`.
+По умолчанию сервер запускает распознавание через `faster-whisper` и пишет транскрипт во входящий markdown.
+
+Если захочешь временно отключить серверную транскрибацию и оставить только сохранение аудио с inbox-markdown:
+
+```bash
+export SERVER_TRANSCRIBE="false"
+```
+
+Когда `SERVER_TRANSCRIBE=true`, сервер использует `faster-whisper` с `WHISPER_MODEL`, `WHISPER_LANGUAGE`, `WHISPER_DEVICE` и `WHISPER_COMPUTE_TYPE`.
 
 ## Что создаёт сервер
 
@@ -183,23 +194,7 @@ Rules:
 - After successful processing, OpenClaw may update `status` from `new` to `processed`.
 ```
 
-`detected_command_hint` и `command_confidence` добавляются только как hint. Сервер не исполняет действие по ним.
-
-## Если faster-whisper не сработал
-
-Сервер всё равно:
-
-- сохраняет исходное аудио
-- копирует его в Obsidian attachments
-- создаёт markdown-файл
-
-В таком markdown будет:
-
-- `status: transcription_failed`
-- блок `## Transcription error`
-- текст ошибки
-
-Это нужно, чтобы OpenClaw всё равно увидел входящий материал и сам решил, что с ним делать.
+Если `SERVER_TRANSCRIBE=true`, сервер записывает в markdown транскрипт и hint-поля `detected_command_hint` / `command_confidence`. Это дефолтный режим.
 
 ## Пример запроса
 
@@ -255,9 +250,11 @@ pytest
 
 - upload создаёт markdown в `80-89 AI/85 Echolet`
 - markdown содержит YAML frontmatter
-- markdown содержит transcript
+- по умолчанию markdown создаётся с серверным transcript
 - audio копируется в `_attachments/YYYY/MM/`
 - markdown содержит ссылку на audio
+- `SERVER_TRANSCRIBE=true` включает серверную транскрибацию через `faster-whisper` и используется по умолчанию
+- `SERVER_TRANSCRIBE=false` отключает серверную транскрибацию
 - при ошибке Whisper markdown всё равно создаётся
 - при ошибке Whisper ставится `status: transcription_failed`
 - сервер не создаёт финальные markdown вне inbox-папки
@@ -267,7 +264,6 @@ pytest
 OpenClaw должен:
 
 - читать входящие markdown-файлы из `80-89 AI/85 Echolet`
-- сортировать записи
 - создавать финальные заметки
 - создавать задачи
 - создавать или планировать напоминания

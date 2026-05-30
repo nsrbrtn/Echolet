@@ -4,10 +4,13 @@
 #include <SD.h>
 
 #include "config.h"
+#include "time_utils.h"
 
 namespace {
 
 constexpr size_t kWavHeaderSize = 44;
+constexpr float kDcBlockAlpha = 0.995f;
+constexpr esp_i2s::i2s_port_t kI2sPort = esp_i2s::I2S_NUM_0;
 
 }  // namespace
 
@@ -18,7 +21,8 @@ bool AudioRecorder::start() {
     return false;
   }
 
-  currentFilename_ = "/echolet/audio/new/recording-" + String(millis()) + ".wav";
+  currentCreatedAt_ = makeIsoTimestamp();
+  currentFilename_ = makeRecordingFilename();
   file_ = SD.open(currentFilename_, FILE_WRITE);
   if (!file_) {
     Serial.print("[recording] failed to open SD file: ");
@@ -27,6 +31,9 @@ bool AudioRecorder::start() {
   }
 
   dataBytesWritten_ = 0;
+  bytesDiscarded_ = 0;
+  previousInputSample_ = 0;
+  previousFilteredSample_ = 0.0f;
   if (!writeWavHeader(0)) {
     Serial.println("[recording] failed to write WAV header");
     file_.close();
@@ -51,8 +58,8 @@ bool AudioRecorder::captureStep() {
   }
 
   uint8_t buffer[kAudioChunkBytes];
-  const int bytesRead = I2S.read(buffer, sizeof(buffer));
-  if (bytesRead < 0) {
+  size_t bytesRead = 0;
+  if (esp_i2s::i2s_read(kI2sPort, buffer, sizeof(buffer), &bytesRead, portMAX_DELAY) != ESP_OK) {
     Serial.println("[recording] I2S read failed");
     return false;
   }
@@ -61,8 +68,41 @@ bool AudioRecorder::captureStep() {
     return true;
   }
 
-  const size_t bytesWritten = file_.write(buffer, static_cast<size_t>(bytesRead));
-  if (bytesWritten != static_cast<size_t>(bytesRead)) {
+  size_t writeOffset = 0;
+  size_t bytesToProcess = static_cast<size_t>(bytesRead);
+  if (bytesDiscarded_ < kAudioDiscardInitialBytes) {
+    const size_t bytesLeftToDiscard = kAudioDiscardInitialBytes - bytesDiscarded_;
+    const size_t discardNow = bytesToProcess > bytesLeftToDiscard ? bytesLeftToDiscard : bytesToProcess;
+    bytesDiscarded_ += discardNow;
+    writeOffset = discardNow;
+    bytesToProcess -= discardNow;
+    if (bytesToProcess == 0) {
+      return true;
+    }
+  }
+
+  int16_t* samples = reinterpret_cast<int16_t*>(buffer + writeOffset);
+  const size_t sampleCount = bytesToProcess / sizeof(int16_t);
+  for (size_t i = 0; i < sampleCount; ++i) {
+    const int16_t input = samples[i];
+    const float filtered =
+        static_cast<float>(input) - static_cast<float>(previousInputSample_) +
+        (kDcBlockAlpha * previousFilteredSample_);
+    previousInputSample_ = input;
+    previousFilteredSample_ = filtered;
+
+    const int32_t amplified = static_cast<int32_t>(filtered * kAudioInputGain);
+    int32_t clipped = amplified;
+    if (clipped > 32767) {
+      clipped = 32767;
+    } else if (clipped < -32768) {
+      clipped = -32768;
+    }
+    samples[i] = static_cast<int16_t>(clipped);
+  }
+
+  const size_t bytesWritten = file_.write(buffer + writeOffset, bytesToProcess);
+  if (bytesWritten != bytesToProcess) {
     Serial.println("[recording] SD write failed");
     return false;
   }
@@ -102,6 +142,10 @@ bool AudioRecorder::isRecording() const {
 
 const String& AudioRecorder::currentFilename() const {
   return currentFilename_;
+}
+
+const String& AudioRecorder::currentCreatedAt() const {
+  return currentCreatedAt_;
 }
 
 bool AudioRecorder::writeWavHeader(uint32_t dataSize) {

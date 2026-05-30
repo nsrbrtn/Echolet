@@ -1,6 +1,7 @@
 #include "wifi_client.h"
 
 #include "config.h"
+#include "time_utils.h"
 #include <WiFi.h>
 
 void WifiClient::begin() {
@@ -9,6 +10,7 @@ void WifiClient::begin() {
   WiFi.persistent(false);
   WiFi.disconnect(true, true);
   connected_ = false;
+  timeSynced_ = false;
 }
 
 bool WifiClient::connect() {
@@ -27,6 +29,18 @@ bool WifiClient::connect() {
     connected_ = true;
     Serial.print("[wifi] already connected, ip=");
     Serial.println(WiFi.localIP());
+    if (!timeSynced_) {
+      timeSynced_ = syncTimeWithNtp();
+      if (timeSynced_) {
+        Serial.print("[time] NTP synchronized (");
+        Serial.print(timeReliabilityName(getTimeReliability()));
+        Serial.print("): ");
+        Serial.println(makeIsoTimestamp());
+      } else {
+        Serial.print("[time] NTP sync failed, current reliability=");
+        Serial.println(timeReliabilityName(getTimeReliability()));
+      }
+    }
     return true;
   }
 
@@ -43,6 +57,16 @@ bool WifiClient::connect() {
       connected_ = true;
       Serial.print("[wifi] connected, ip=");
       Serial.println(WiFi.localIP());
+      timeSynced_ = syncTimeWithNtp();
+      if (timeSynced_) {
+        Serial.print("[time] NTP synchronized (");
+        Serial.print(timeReliabilityName(getTimeReliability()));
+        Serial.print("): ");
+        Serial.println(makeIsoTimestamp());
+      } else {
+        Serial.print("[time] NTP sync failed, current reliability=");
+        Serial.println(timeReliabilityName(getTimeReliability()));
+      }
       return true;
     }
 

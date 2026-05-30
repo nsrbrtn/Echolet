@@ -143,6 +143,26 @@ bool Storage::saveRecordingPlaceholder(const String& path) {
   return ok;
 }
 
+bool Storage::renameFile(const String& fromPath, const String& toPath) {
+  if (fromPath.length() == 0 || toPath.length() == 0 || fromPath == toPath) {
+    return false;
+  }
+
+  if (!SD.exists(fromPath)) {
+    Serial.print("[storage] rename source missing: ");
+    Serial.println(fromPath);
+    return false;
+  }
+
+  if (SD.exists(toPath)) {
+    Serial.print("[storage] rename target already exists: ");
+    Serial.println(toPath);
+    return false;
+  }
+
+  return SD.rename(fromPath, toPath);
+}
+
 bool Storage::moveToSent(const String& path) {
   String toPath = path;
   toPath.replace("/audio/new/", "/audio/sent/");

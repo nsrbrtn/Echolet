@@ -5,6 +5,7 @@
 #include <WiFiClient.h>
 
 #include "config.h"
+#include "time_utils.h"
 
 namespace {
 
@@ -14,19 +15,6 @@ String filenameFromPath(const String& path) {
     return path;
   }
   return path.substring(slashIndex + 1);
-}
-
-String isoTimestampFromMillis(unsigned long nowMs) {
-  unsigned long totalSeconds = nowMs / 1000;
-  const unsigned long seconds = totalSeconds % 60;
-  totalSeconds /= 60;
-  const unsigned long minutes = totalSeconds % 60;
-  totalSeconds /= 60;
-  const unsigned long hours = totalSeconds % 24;
-
-  char buffer[32];
-  snprintf(buffer, sizeof(buffer), "1970-01-01T%02lu:%02lu:%02luZ", hours, minutes, seconds);
-  return String(buffer);
 }
 
 bool parseHttpUrl(const String& url, String& host, uint16_t& port, String& path) {
@@ -83,7 +71,7 @@ int readStatusCode(WiFiClient& client) {
 
 void Uploader::begin() {}
 
-bool Uploader::upload(const String& path) {
+bool Uploader::upload(const String& path, const String& createdAt) {
   if (kEnableUploadStub) {
     return true;
   }
@@ -110,7 +98,6 @@ bool Uploader::upload(const String& path) {
 
   const String boundary = "----echoletBoundary7MA4YWxkTrZu0gW";
   const String filename = filenameFromPath(path);
-  const String createdAt = isoTimestampFromMillis(millis());
   const String battery = "unknown";
 
   String filePartHeader;

@@ -5,5 +5,5 @@
 class Uploader {
  public:
   void begin();
-  bool upload(const String& path);
+  bool upload(const String& path, const String& createdAt);
 };

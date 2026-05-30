@@ -8,6 +8,7 @@
 #include "led.h"
 #include "queue.h"
 #include "storage.h"
+#include "time_utils.h"
 #include "uploader.h"
 #include "wifi_client.h"
 
@@ -39,7 +40,9 @@ UploadQueue gQueue;
 
 AppState gState = AppState::kBoot;
 String gCurrentRecordingPath;
+String gCurrentRecordingCreatedAt;
 String gPendingUploadPath;
+String gPendingUploadCreatedAt;
 unsigned long gNextUploadRetryAtMs = 0;
 unsigned long gPowerButtonPressedAtMs = 0;
 bool gPowerHoldBlockedLogged = false;
@@ -101,6 +104,7 @@ void logWakeReason() {
 
 void enterDeepSleep() {
   Serial.println("[power] entering deep sleep");
+  persistCurrentTimeEstimate();
   gLed.setMode(LedMode::kOff);
   gLed.update();
 
@@ -154,6 +158,7 @@ void handlePowerButton() {
 
 void handleBoot() {
   Serial.println("[boot] initializing modules");
+  beginTimekeeping();
   gRecordButton.begin();
   gPowerButton.begin();
   gLed.begin();
@@ -234,10 +239,12 @@ void handleSaveRecording() {
   }
 
   gCurrentRecordingPath = gRecorder.currentFilename();
+  gCurrentRecordingCreatedAt = gRecorder.currentCreatedAt();
   Serial.print("[recording] stopped: ");
   Serial.println(gCurrentRecordingPath);
   Serial.println("[storage] recording saved to SD");
   gPendingUploadPath = gCurrentRecordingPath;
+  gPendingUploadCreatedAt = gCurrentRecordingCreatedAt;
   gNextUploadRetryAtMs = 0;
   gRetryReason = RetryReason::kNone;
   transitionTo(AppState::kTryUpload);
@@ -257,7 +264,24 @@ void handleTryUpload() {
     return;
   }
 
-  if (gUploader.upload(gPendingUploadPath)) {
+  if (isFallbackIsoTimestamp(gPendingUploadCreatedAt) && isWallClockValid()) {
+    gPendingUploadCreatedAt = makeIsoTimestamp();
+    Serial.print("[time] updated created_at after NTP sync: ");
+    Serial.println(gPendingUploadCreatedAt);
+
+    const String renamedPath = makeRecordingFilename();
+    if (renamedPath != gPendingUploadPath) {
+      if (gStorage.renameFile(gPendingUploadPath, renamedPath)) {
+        Serial.print("[storage] renamed recording after NTP sync: ");
+        Serial.println(renamedPath);
+        gPendingUploadPath = renamedPath;
+      } else {
+        Serial.println("[storage] rename after NTP sync failed, keeping original path");
+      }
+    }
+  }
+
+  if (gUploader.upload(gPendingUploadPath, gPendingUploadCreatedAt)) {
     Serial.println("[upload] success");
     gStorage.moveToSent(gPendingUploadPath);
     if (gQueue.hasPending() && gQueue.peek() == gPendingUploadPath) {
@@ -265,6 +289,7 @@ void handleTryUpload() {
     }
     gLed.setMode(LedMode::kSuccessFlash);
     gPendingUploadPath = String();
+    gPendingUploadCreatedAt = String();
     transitionTo(AppState::kIdle);
     return;
   }

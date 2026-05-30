@@ -36,10 +36,35 @@ The first version focuses on voice notes only:
 
 - ESP32-S3 Sense
 - microSD card
-- record button
-- RGB LED
+- record button on `D1`
+- power / wake button on `D2`
+- WS2812B RGB LED on `D3`
 - 1000 mAh battery
 - compact 3D-printed enclosure
+
+Current confirmed MVP wiring:
+
+- `D1 -> GND`: record button
+- `D2 -> GND`: power / wake button
+- `D3`: WS2812B data input
+- `3V3`: WS2812B power
+- `GND`: WS2812B ground
+
+Current firmware behavior:
+
+- hold `D1` to record
+- release `D1` to stop recording
+- hold `D2` for 3 seconds in idle or queued state, then release to enter deep sleep
+- press `D2` to wake the device from deep sleep
+
+Current LED indications:
+
+- startup: short red -> green -> blue animation
+- ready: dim green
+- recording: red
+- uploading: blue
+- queued offline: slow dim yellow pulse
+- upload error: blinking red
 
 ## Why This Exists
 

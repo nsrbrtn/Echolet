@@ -2,19 +2,17 @@
 
 #include "config.h"
 
-Led::Led(int redPin, int greenPin, int bluePin)
-    : redPin_(redPin),
-      greenPin_(greenPin),
-      bluePin_(bluePin),
+Led::Led(int pin, int count)
+    : pixel_(count, pin, NEO_GRB + NEO_KHZ800),
       mode_(LedMode::kOff),
       lastTickMs_(0),
       blinkOn_(false) {}
 
 void Led::begin() {
-  pinMode(redPin_, OUTPUT);
-  pinMode(greenPin_, OUTPUT);
-  pinMode(bluePin_, OUTPUT);
+  pixel_.begin();
+  pixel_.setBrightness(20);
   applyColor(0, 0, 0);
+  playStartupAnimation();
 }
 
 void Led::setMode(LedMode mode) {
@@ -39,6 +37,13 @@ void Led::update() {
       break;
     case LedMode::kSuccessFlash:
       applyColor(0, 64, 0);
+      break;
+    case LedMode::kQueuedOffline:
+      if (now - lastTickMs_ >= 2000) {
+        blinkOn_ = !blinkOn_;
+        lastTickMs_ = now;
+      }
+      applyColor(blinkOn_ ? 8 : 0, blinkOn_ ? 6 : 0, 0);
       break;
     case LedMode::kWifiError:
       if (now - lastTickMs_ >= kErrorBlinkMs) {
@@ -65,7 +70,17 @@ void Led::update() {
 }
 
 void Led::applyColor(uint8_t red, uint8_t green, uint8_t blue) {
-  analogWrite(redPin_, red);
-  analogWrite(greenPin_, green);
-  analogWrite(bluePin_, blue);
+  pixel_.setPixelColor(0, pixel_.Color(red, green, blue));
+  pixel_.show();
+}
+
+void Led::playStartupAnimation() {
+  applyColor(48, 0, 0);
+  delay(120);
+  applyColor(0, 48, 0);
+  delay(120);
+  applyColor(0, 0, 48);
+  delay(120);
+  applyColor(0, 0, 0);
+  delay(80);
 }

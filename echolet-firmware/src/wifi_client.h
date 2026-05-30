@@ -9,5 +9,6 @@ class WifiClient {
   bool isConnected() const;
 
  private:
+  bool hasCredentials() const;
   bool connected_ = false;
 };

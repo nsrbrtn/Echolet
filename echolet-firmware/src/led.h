@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Adafruit_NeoPixel.h>
 #include <Arduino.h>
 
 enum class LedMode {
@@ -8,6 +9,7 @@ enum class LedMode {
   kRecording,
   kUploading,
   kSuccessFlash,
+  kQueuedOffline,
   kWifiError,
   kUploadError,
   kLowBattery,
@@ -15,18 +17,17 @@ enum class LedMode {
 
 class Led {
  public:
-  Led(int redPin, int greenPin, int bluePin);
+  explicit Led(int pin, int count = 1);
 
   void begin();
   void setMode(LedMode mode);
-  void update();
+ void update();
 
  private:
   void applyColor(uint8_t red, uint8_t green, uint8_t blue);
+  void playStartupAnimation();
 
-  int redPin_;
-  int greenPin_;
-  int bluePin_;
+  Adafruit_NeoPixel pixel_;
   LedMode mode_;
   unsigned long lastTickMs_;
   bool blinkOn_;

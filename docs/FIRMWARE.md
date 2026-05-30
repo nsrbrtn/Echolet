@@ -13,7 +13,15 @@ Target hardware for MVP is ESP32-S3 Sense, flashed over USB-C.
 
 ## Pins And Configuration
 
-Exact pin mapping is not fixed yet and should be documented once hardware wiring is confirmed. For MVP, Wi-Fi SSID and password may live in `config.h`.
+Current confirmed MVP wiring:
+
+- record button: `D1 -> GND`
+- power / wake button: `D2 -> GND`
+- WS2812B `DI -> D3`
+- WS2812B `5V -> 3V3`
+- WS2812B `GND -> GND`
+
+For MVP, Wi-Fi SSID and password may live in `config.h`.
 
 Configuration assumptions for MVP:
 
@@ -32,17 +40,29 @@ button released -> stop recording
 
 One or two buttons are acceptable in hardware, but MVP behavior should stay simple and deterministic.
 
+Current firmware behavior:
+
+- `D1` is the record button
+- `D2` is the power / wake button
+- holding `D2` for 3 seconds in idle or queued state arms power-off
+- releasing `D2` after that enters deep sleep
+- pressing `D2` wakes the device from deep sleep
+- power-off is ignored during recording, save, and active upload attempt
+
 ## RGB LED
 
 Required states:
 
-- ready: off or dim green
+- startup: short red -> green -> blue animation
+- ready: dim green
 - recording: red
 - uploading: blue
 - success: short green flash
-- Wi-Fi error: blinking yellow
+- queued offline: slow dim yellow pulse
+- Wi-Fi error: reserved for explicit Wi-Fi fault indication
 - upload error: blinking red
 - low battery: rare red blink
+- power off pending: LED off before deep sleep
 
 ## Audio
 

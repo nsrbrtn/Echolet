@@ -204,13 +204,16 @@ Never delete automatically from:
 
 | State | Indication |
 |---|---|
+| Startup | short red -> green -> blue animation |
 | Ready | off or dim green |
 | Recording | red |
 | Uploading | blue |
 | Upload success | short green flash |
-| Wi-Fi error | blinking yellow |
+| Queued offline | slow dim yellow pulse |
+| Wi-Fi error | reserved for explicit Wi-Fi fault indication |
 | Upload error | blinking red |
 | Low battery | slow red blink |
+| Power off pending | LED off before deep sleep |
 
 ## Do Not Implement Yet
 

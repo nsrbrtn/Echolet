@@ -41,12 +41,16 @@ UploadQueue gQueue;
 AppState gState = AppState::kBoot;
 String gCurrentRecordingPath;
 String gCurrentRecordingCreatedAt;
+TimeReliability gCurrentRecordingTimeReliability = TimeReliability::kInvalid;
 String gPendingUploadPath;
 String gPendingUploadCreatedAt;
 unsigned long gNextUploadRetryAtMs = 0;
 unsigned long gPowerButtonPressedAtMs = 0;
 bool gPowerHoldBlockedLogged = false;
 RetryReason gRetryReason = RetryReason::kNone;
+bool gUploadAttemptLogged = false;
+bool gBootInitialized = false;
+unsigned long gBootPreflightStartedAtMs = 0;
 
 const char* stateName(AppState state) {
   switch (state) {
@@ -77,6 +81,9 @@ void transitionTo(AppState nextState) {
     Serial.print(stateName(gState));
     Serial.print(" -> ");
     Serial.println(stateName(nextState));
+  }
+  if (nextState != AppState::kTryUpload) {
+    gUploadAttemptLogged = false;
   }
   gState = nextState;
 }
@@ -157,28 +164,62 @@ void handlePowerButton() {
 }
 
 void handleBoot() {
-  Serial.println("[boot] initializing modules");
-  beginTimekeeping();
-  gRecordButton.begin();
-  gPowerButton.begin();
-  gLed.begin();
-  gRecorder.begin();
-  gWifi.begin();
-  gUploader.begin();
-  gQueue.begin();
+  if (!gBootInitialized) {
+    Serial.println("[boot] initializing modules");
+    beginTimekeeping();
+    gRecordButton.begin();
+    gPowerButton.begin();
+    gLed.begin();
+    gRecorder.begin();
+    gWifi.begin();
+    gUploader.begin();
 
-  const bool storageReady = gStorage.begin() && gStorage.ensureLayout();
+    const bool storageReady = gStorage.begin() && gStorage.ensureLayout();
+    if (!storageReady) {
+      Serial.println("[boot] storage init failed");
+      gLed.setMode(LedMode::kUploadError);
+      transitionTo(AppState::kError);
+      return;
+    }
 
-  if (!storageReady) {
-    Serial.println("[boot] storage init failed");
-    gLed.setMode(LedMode::kUploadError);
-    transitionTo(AppState::kError);
+    if (!gQueue.begin()) {
+      Serial.println("[boot] queue init failed");
+      gLed.setMode(LedMode::kUploadError);
+      transitionTo(AppState::kError);
+      return;
+    }
+
+    gBootInitialized = true;
+    gBootPreflightStartedAtMs = millis();
+    Serial.println("[boot] storage ready");
+    Serial.println("[boot] waiting briefly for Wi-Fi/NTP before ready");
     return;
   }
 
-  Serial.println("[boot] storage ready");
-  gLed.setMode(LedMode::kReady);
-  transitionTo(AppState::kIdle);
+  const WifiReadyStatus wifiStatus = gWifi.ensureReady();
+  if (wifiStatus == WifiReadyStatus::kReady) {
+    Serial.print("[boot] ready with time reliability=");
+    Serial.println(timeReliabilityName(getTimeReliability()));
+    gLed.setMode(LedMode::kReady);
+    transitionTo(AppState::kIdle);
+    return;
+  }
+
+  if (wifiStatus == WifiReadyStatus::kFailed) {
+    Serial.print("[boot] continuing without network time, reliability=");
+    Serial.println(timeReliabilityName(getTimeReliability()));
+    gLed.setMode(LedMode::kReady);
+    transitionTo(AppState::kIdle);
+    return;
+  }
+
+  gLed.setMode(LedMode::kUploading);
+  if (millis() - gBootPreflightStartedAtMs >= kBootTimeSyncBudgetMs) {
+    Serial.print("[boot] Wi-Fi/NTP preflight timed out, reliability=");
+    Serial.println(timeReliabilityName(getTimeReliability()));
+    gLed.setMode(LedMode::kReady);
+    transitionTo(AppState::kIdle);
+  }
 }
 
 void handleIdle() {
@@ -187,19 +228,6 @@ void handleIdle() {
     gLed.setMode(LedMode::kQueuedOffline);
   } else {
     gLed.setMode(LedMode::kReady);
-  }
-
-  if (gQueue.hasPending()) {
-    const unsigned long now = millis();
-    if (now < gNextUploadRetryAtMs) {
-      return;
-    }
-
-    gPendingUploadPath = gQueue.peek();
-    Serial.print("[queue] retry pending file: ");
-    Serial.println(gPendingUploadPath);
-    transitionTo(AppState::kTryUpload);
-    return;
   }
 
   if (gRecordButton.wasPressed()) {
@@ -213,7 +241,44 @@ void handleIdle() {
       Serial.println("[recording] start failed");
       transitionTo(AppState::kError);
     }
+    return;
   }
+
+  if (!gQueue.hasPending()) {
+    return;
+  }
+
+  const unsigned long now = millis();
+  if (gRetryReason == RetryReason::kWifiUnavailable) {
+    if (gWifi.isConnected()) {
+      gNextUploadRetryAtMs = 0;
+    } else if (now >= gNextUploadRetryAtMs) {
+      const WifiReadyStatus wifiStatus = gWifi.ensureReady();
+      if (wifiStatus == WifiReadyStatus::kFailed) {
+        gNextUploadRetryAtMs = now + kWifiRetryIntervalMs;
+        Serial.print("[wifi] retry deferred for ms: ");
+        Serial.println(kWifiRetryIntervalMs);
+      }
+      return;
+    } else {
+      return;
+    }
+  } else if (now < gNextUploadRetryAtMs) {
+    return;
+  }
+
+  UploadQueueItem pendingItem;
+  if (!gQueue.peek(pendingItem)) {
+    Serial.println("[queue] failed to read pending item");
+    transitionTo(AppState::kError);
+    return;
+  }
+
+  gPendingUploadPath = pendingItem.path;
+  gPendingUploadCreatedAt = pendingItem.createdAt;
+  Serial.print("[queue] retry pending file: ");
+  Serial.println(gPendingUploadPath);
+  transitionTo(AppState::kTryUpload);
 }
 
 void handleRecording() {
@@ -240,6 +305,7 @@ void handleSaveRecording() {
 
   gCurrentRecordingPath = gRecorder.currentFilename();
   gCurrentRecordingCreatedAt = gRecorder.currentCreatedAt();
+  gCurrentRecordingTimeReliability = gRecorder.currentTimeReliability();
   Serial.print("[recording] stopped: ");
   Serial.println(gCurrentRecordingPath);
   Serial.println("[storage] recording saved to SD");
@@ -252,11 +318,18 @@ void handleSaveRecording() {
 
 void handleTryUpload() {
   gLed.setMode(LedMode::kUploading);
-  Serial.print("[upload] trying file: ");
-  Serial.println(gPendingUploadPath);
+  if (!gUploadAttemptLogged) {
+    Serial.print("[upload] trying file: ");
+    Serial.println(gPendingUploadPath);
+    gUploadAttemptLogged = true;
+  }
 
-  const bool wifiReady = gWifi.isConnected() || gWifi.connect();
-  if (!wifiReady) {
+  const WifiReadyStatus wifiStatus = gWifi.ensureReady();
+  if (wifiStatus == WifiReadyStatus::kInProgress) {
+    return;
+  }
+
+  if (wifiStatus == WifiReadyStatus::kFailed) {
     Serial.println("[wifi] connect failed, queueing for later");
     gRetryReason = RetryReason::kWifiUnavailable;
     gLed.setMode(LedMode::kQueuedOffline);
@@ -264,27 +337,43 @@ void handleTryUpload() {
     return;
   }
 
-  if (isFallbackIsoTimestamp(gPendingUploadCreatedAt) && isWallClockValid()) {
+  if (gCurrentRecordingTimeReliability != TimeReliability::kFreshNtp &&
+      getTimeReliability() == TimeReliability::kFreshNtp && isWallClockValid()) {
     gPendingUploadCreatedAt = makeIsoTimestamp();
-    Serial.print("[time] updated created_at after NTP sync: ");
+    Serial.print("[time] refreshed created_at after fresh NTP sync: ");
     Serial.println(gPendingUploadCreatedAt);
 
     const String renamedPath = makeRecordingFilename();
     if (renamedPath != gPendingUploadPath) {
       if (gStorage.renameFile(gPendingUploadPath, renamedPath)) {
-        Serial.print("[storage] renamed recording after NTP sync: ");
+        Serial.print("[storage] renamed recording after fresh NTP sync: ");
         Serial.println(renamedPath);
         gPendingUploadPath = renamedPath;
+        gCurrentRecordingPath = renamedPath;
       } else {
-        Serial.println("[storage] rename after NTP sync failed, keeping original path");
+        Serial.println("[storage] rename after fresh NTP sync failed, keeping original path");
       }
     }
+    gCurrentRecordingTimeReliability = TimeReliability::kFreshNtp;
   }
 
   if (gUploader.upload(gPendingUploadPath, gPendingUploadCreatedAt)) {
     Serial.println("[upload] success");
-    gStorage.moveToSent(gPendingUploadPath);
-    if (gQueue.hasPending() && gQueue.peek() == gPendingUploadPath) {
+    const String uploadedPath = gPendingUploadPath;
+    if (!gStorage.moveToSent(gPendingUploadPath)) {
+      Serial.println("[storage] failed to move uploaded file to sent");
+      transitionTo(AppState::kError);
+      return;
+    }
+    Serial.print("[storage] moved uploaded file to sent: ");
+    Serial.println(uploadedPath);
+
+    if (!gStorage.cleanupSentIfNeeded()) {
+      Serial.println("[storage] cleanup failed after upload");
+    }
+
+    UploadQueueItem pendingItem;
+    if (gQueue.peek(pendingItem) && pendingItem.path == gPendingUploadPath) {
       gQueue.pop();
     }
     gLed.setMode(LedMode::kSuccessFlash);
@@ -306,9 +395,9 @@ void handleQueueForLater() {
     return;
   }
 
-  const bool alreadyQueued = gQueue.hasPending() && gQueue.peek() == gPendingUploadPath;
+  const bool alreadyQueued = gQueue.containsPath(gPendingUploadPath);
   if (!alreadyQueued) {
-    if (!gQueue.enqueue(gPendingUploadPath)) {
+    if (!gQueue.enqueue(gPendingUploadPath, gPendingUploadCreatedAt)) {
       Serial.println("[queue] enqueue failed, marking file as failed");
       gStorage.markFailed(gPendingUploadPath);
       transitionTo(AppState::kError);

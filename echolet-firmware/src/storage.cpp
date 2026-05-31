@@ -19,6 +19,7 @@ constexpr const char* kMetaDir = "/echolet/meta";
 constexpr const char* kLogsDir = "/echolet/logs";
 constexpr const char* kQueueFile = "/echolet/queue.json";
 constexpr const char* kDeviceLogFile = "/echolet/logs/device.log";
+constexpr int kStorageCleanupThresholdPercent = 80;
 
 bool ensureDir(const char* path) {
   if (SD.exists(path)) {
@@ -96,6 +97,34 @@ bool writeSilenceWav(File& file) {
   }
 
   return true;
+}
+
+bool findOldestSentFile(String& oldestPath) {
+  File dir = SD.open(kAudioSentDir);
+  if (!dir || !dir.isDirectory()) {
+    return false;
+  }
+
+  String oldestName;
+  File entry = dir.openNextFile();
+  while (entry) {
+    if (!entry.isDirectory()) {
+      const String fullPath = String(entry.path());
+      const int slashIndex = fullPath.lastIndexOf('/');
+      const String filename = slashIndex >= 0 ? fullPath.substring(slashIndex + 1) : fullPath;
+
+      if (oldestName.length() == 0 || filename < oldestName) {
+        oldestName = filename;
+        oldestPath = fullPath;
+      }
+    }
+
+    entry.close();
+    entry = dir.openNextFile();
+  }
+
+  dir.close();
+  return oldestPath.length() > 0;
 }
 
 }  // namespace
@@ -183,4 +212,37 @@ int Storage::usagePercent() const {
 
   const uint64_t usedBytes = SD.usedBytes();
   return static_cast<int>((usedBytes * 100ULL) / totalBytes);
+}
+
+bool Storage::cleanupSentIfNeeded() {
+  int currentUsage = usagePercent();
+  if (currentUsage <= kStorageCleanupThresholdPercent) {
+    return true;
+  }
+
+  Serial.print("[storage] usage above threshold, starting cleanup: ");
+  Serial.print(currentUsage);
+  Serial.println("%");
+
+  while (currentUsage > kStorageCleanupThresholdPercent) {
+    String oldestPath;
+    if (!findOldestSentFile(oldestPath)) {
+      Serial.println("[storage] no files left in sent/ for cleanup");
+      return false;
+    }
+
+    Serial.print("[storage] deleting oldest sent file: ");
+    Serial.println(oldestPath);
+    if (!SD.remove(oldestPath)) {
+      Serial.println("[storage] failed to delete sent file");
+      return false;
+    }
+
+    currentUsage = usagePercent();
+    Serial.print("[storage] usage after cleanup step: ");
+    Serial.print(currentUsage);
+    Serial.println("%");
+  }
+
+  return true;
 }

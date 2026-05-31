@@ -1,6 +1,7 @@
 #include "time_utils.h"
 
 #include <Preferences.h>
+#include <esp_sntp.h>
 #include <time.h>
 #include <sys/time.h>
 
@@ -16,6 +17,9 @@ Preferences gTimePrefs;
 bool gTimePrefsReady = false;
 bool gTimeRestoredFromStorage = false;
 bool gHasNtpSyncThisSession = false;
+bool gNtpSyncInProgress = false;
+unsigned long gNtpSyncStartedAtMs = 0;
+time_t gNtpSyncBaselineEpoch = 0;
 
 void ensurePrefsOpen() {
   if (!gTimePrefsReady) {
@@ -92,6 +96,21 @@ const char* timeReliabilityName(TimeReliability reliability) {
   return "unknown";
 }
 
+const char* ntpSyncStatusName(NtpSyncStatus status) {
+  switch (status) {
+    case NtpSyncStatus::kIdle:
+      return "idle";
+    case NtpSyncStatus::kInProgress:
+      return "in_progress";
+    case NtpSyncStatus::kSucceeded:
+      return "succeeded";
+    case NtpSyncStatus::kTimedOut:
+      return "timed_out";
+  }
+
+  return "unknown";
+}
+
 void beginTimekeeping() {
   ensurePrefsOpen();
   if (!gTimePrefsReady) {
@@ -129,19 +148,58 @@ bool syncTimeWithNtp() {
     return true;
   }
 
-  configTzTime(kTimeZonePosix, kNtpServerPrimary, kNtpServerSecondary);
-  const unsigned long startedAtMs = millis();
-  while (millis() - startedAtMs < kNtpSyncTimeoutMs) {
-    if (isWallClockValid()) {
-      saveEpochToPrefs(time(nullptr));
-      gHasNtpSyncThisSession = true;
-      gTimeRestoredFromStorage = false;
+  beginNtpSync();
+  while (true) {
+    const NtpSyncStatus status = pollNtpSync();
+    if (status == NtpSyncStatus::kSucceeded) {
       return true;
+    }
+    if (status == NtpSyncStatus::kTimedOut) {
+      return false;
     }
     delay(kNtpPollIntervalMs);
   }
+}
 
-  return false;
+void beginNtpSync() {
+  if (gHasNtpSyncThisSession || gNtpSyncInProgress) {
+    return;
+  }
+
+  gNtpSyncBaselineEpoch = time(nullptr);
+  sntp_set_sync_status(SNTP_SYNC_STATUS_RESET);
+  configTzTime(kTimeZonePosix, kNtpServerPrimary, kNtpServerSecondary);
+  gNtpSyncStartedAtMs = millis();
+  gNtpSyncInProgress = true;
+}
+
+NtpSyncStatus pollNtpSync() {
+  if (gHasNtpSyncThisSession) {
+    return NtpSyncStatus::kSucceeded;
+  }
+
+  if (!gNtpSyncInProgress) {
+    return NtpSyncStatus::kIdle;
+  }
+
+  const sntp_sync_status_t syncStatus = sntp_get_sync_status();
+  const time_t now = time(nullptr);
+  if (syncStatus == SNTP_SYNC_STATUS_COMPLETED ||
+      (syncStatus == SNTP_SYNC_STATUS_IN_PROGRESS && now != gNtpSyncBaselineEpoch &&
+       now >= kMinimumValidEpoch)) {
+    saveEpochToPrefs(time(nullptr));
+    gHasNtpSyncThisSession = true;
+    gTimeRestoredFromStorage = false;
+    gNtpSyncInProgress = false;
+    return NtpSyncStatus::kSucceeded;
+  }
+
+  if (millis() - gNtpSyncStartedAtMs >= kNtpSyncTimeoutMs) {
+    gNtpSyncInProgress = false;
+    return NtpSyncStatus::kTimedOut;
+  }
+
+  return NtpSyncStatus::kInProgress;
 }
 
 bool isWallClockValid() {

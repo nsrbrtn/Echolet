@@ -11,4 +11,5 @@ class Storage {
   bool moveToSent(const String& path);
   bool markFailed(const String& path);
   int usagePercent() const;
+  bool cleanupSentIfNeeded();
 };

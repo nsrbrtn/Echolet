@@ -23,6 +23,7 @@ bool AudioRecorder::start() {
 
   currentCreatedAt_ = makeIsoTimestamp();
   currentFilename_ = makeRecordingFilename();
+  currentTimeReliability_ = getTimeReliability();
   file_ = SD.open(currentFilename_, FILE_WRITE);
   if (!file_) {
     Serial.print("[recording] failed to open SD file: ");
@@ -146,6 +147,10 @@ const String& AudioRecorder::currentFilename() const {
 
 const String& AudioRecorder::currentCreatedAt() const {
   return currentCreatedAt_;
+}
+
+TimeReliability AudioRecorder::currentTimeReliability() const {
+  return currentTimeReliability_;
 }
 
 bool AudioRecorder::writeWavHeader(uint32_t dataSize) {
